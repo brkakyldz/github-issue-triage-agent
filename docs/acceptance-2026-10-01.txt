@@ -1,0 +1,20 @@
+Repository brkakyldz/issue-triage-sandbox: 14 open issues; labels cleared.
+
+Run finished in 98s with 16 reviewed writes; todos: ['completed', 'completed', 'completed', 'completed']
+
+[PASS] 1. triage.md lists every open issue with a label and a one-line reason
+       output/triage.md: 14 rows for 14 open issues; missing []; rows without a main label or reason []; main label agrees with the seed's answer key on 14/14
+
+[PASS] 2. at least one seeded duplicate pair is found
+       seeded [[1, 11], [4, 12]]; found in report [[1, 11], [4, 12]]; 2/2 correct
+
+[PASS] 3. label/comment writes wait for approval; approve shows on GitHub, reject changes nothing
+       16 writes reviewed (14 add_labels, 2 post_comment); every open issue's labels equal the approved calls: True ; edited #13 -> ['documentation', 'good first issue']; rejected #10 -> labels none; comment counts equal the approved comments ([11] approved, [12] rejected): True ; approved text posted: True; comments proposed on non-duplicates: none
+
+[PASS] 4. subagent runs nested in the main agent's trace
+       project github-issue-triage-agent, root run 'issue-triage' (115 runs): issue-triage > tools > FilesystemMiddleware.wrap_tool_call > HumanInTheLoopMiddleware.wrap_tool_call > task > duplicate-finder; <LangSmith run link>
+
+[PASS] 5. a second run triages only the issues still without labels
+       unlabelled after the first run: [10]; the second run's to_triage: [10]; add_labels proposed for ['10'] (1 reviewed calls, all rejected, against 16 in the first run); GitHub unchanged: True
+
+5/5 checks passed

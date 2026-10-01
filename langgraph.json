@@ -1,0 +1,11 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "triage": {
+      "path": "issue_triage.graph:agent",
+      "description": "Deep agent that triages the open issues of GITHUB_REPO; label and comment writes need approval"
+    }
+  },
+  "env": ".env",
+  "python_version": "3.12"
+}

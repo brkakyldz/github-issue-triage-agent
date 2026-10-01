@@ -1,0 +1,38 @@
+[project]
+name = "github-issue-triage-agent"
+version = "0.1.0"
+description = "GitHub issue triage deep agent with human approval for every write"
+authors = [{ name = "Berke Akyıldız" }]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents>=0.7.20",
+    "langchain-openai>=1.6.6",
+    "langsmith>=0.14.1",
+    "pygithub>=2.10.0",
+    "python-dotenv>=1.2.3",
+]
+
+[project.scripts]
+triage = "issue_triage.run:main"
+triage-seed = "issue_triage.seed:main"
+
+[build-system]
+requires = ["uv_build>=0.11.26,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "langgraph-cli[inmem]>=0.4.32",
+    "pytest>=9.1.1",
+]
+
+[tool.uv.build-backend]
+module-name = "issue_triage"
+
+[tool.ruff]
+line-length = 140
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
