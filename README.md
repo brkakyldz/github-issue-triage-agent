@@ -39,17 +39,20 @@ the subagent call and every tool call are in the [trace](#tracing).
 
 ```mermaid
 flowchart TD
-    U["triage / langgraph dev"] --> A
+    U["triage CLI or langgraph dev"] --> P
     subgraph A["create_deep_agent: issue-triage"]
         P["write_todos: plan"] --> L["list_open_issues<br/>to_triage + already_triaged"]
         L --> T["task → duplicate-finder<br/>(read-only subagent)"]
         T --> W["write_file /triage.md<br/>(virtual filesystem)"]
-        W --> H{"add_labels / post_comment"}
-        H -->|interrupt| R(("human:<br/>approve / edit / reject"))
-        R --> E["edit_file /triage.md: Applied column"]
+        W --> H["proposed add_labels /<br/>post_comment calls"]
+        H -->|interrupt| R{"human review"}
+        R -->|approve / edit| X["the tools run"]
+        R -->|reject + reason| E
+        X --> E["edit_file /triage.md:<br/>Applied column"]
     end
-    H <-->|approved calls only| GH[("GitHub repository<br/>(GITHUB_REPO)")]
-    A -->|host script copies the report| F["output/triage.md"]
+    GH[("GitHub repository<br/>(GITHUB_REPO)")] -.->|read| L
+    X -->|write| GH
+    E -->|copied after the run| F["output/triage.md"]
 ```
 
 | Tool | What it does | Review |
