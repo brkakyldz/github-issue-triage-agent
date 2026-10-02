@@ -23,7 +23,7 @@ load_env()
 from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 
-from issue_triage.agent import REPORT_PATH, build_agent  # noqa: E402
+from issue_triage.agent import REPORT_PATH, build_agent, describe_batch  # noqa: E402
 
 OUTPUT_DIR = PROJECT_DIR / "output"
 BOLD, DIM, GREEN, RED, YELLOW, RESET = "\033[1m", "\033[2m", "\033[32m", "\033[31m", "\033[33m", "\033[0m"
@@ -93,27 +93,55 @@ def save_report(files: dict, out_dir: Path = OUTPUT_DIR) -> Path | None:
     return dest
 
 
+def _edit_batch(args: dict) -> dict:
+    """Change or drop items of the batch by their number on the review screen."""
+    labels = [dict(c) for c in args.get("labels") or []]
+    comments = [dict(c) for c in args.get("comments") or []]
+    items = [("labels", c) for c in labels] + [("comment", c) for c in comments]
+    dropped: set[int] = set()
+    while True:
+        raw = input("  item to change or drop (number), Enter when done: ").strip()
+        if not raw:
+            break
+        if not raw.isdigit() or not 1 <= int(raw) <= len(items):
+            print(f"  pick 1-{len(items)}")
+            continue
+        index = int(raw) - 1
+        kind, change = items[index]
+        if kind == "labels":
+            current = ", ".join(map(str, change.get("labels") or []))
+            new = input(f"  labels for #{visible(change.get('number'))}, comma-separated, '-' drops it "
+                        f"[{visible(current)}]: ").strip()
+            if new and new != "-":
+                change["labels"] = [x.strip() for x in new.split(",") if x.strip()]
+        else:
+            new = input(f"  comment for #{visible(change.get('number'))}, '-' drops it, Enter keeps it: ").strip()
+            if new and new != "-":
+                change["body"] = new
+        if new == "-":
+            dropped.add(index)
+        else:
+            dropped.discard(index)
+    edited = {**args,
+              "labels": [c for i, c in enumerate(labels) if i not in dropped],
+              "comments": [c for i, c in enumerate(comments, len(labels)) if i not in dropped]}
+    print(visible(describe_batch(edited)))
+    return edited
+
+
 def ask_reviewer(request: dict) -> dict:
-    print(f"\n{YELLOW}{BOLD}── approval needed: {request['name']} ─────────────────{RESET}")
+    """One review screen for the whole batch the agent prepared."""
+    print(f"\n{YELLOW}{BOLD}── review the triage before it goes to GitHub ─────────────────{RESET}")
     print(visible(request.get("description") or request["args"]))
     while True:
-        choice = input(f"{YELLOW}[a]pprove / [e]dit / [r]eject{RESET}: ").strip().lower()[:1]
+        choice = input(f"{YELLOW}[a]pply all / [e]dit / [r]eject all{RESET}: ").strip().lower()[:1]
         if choice == "a":
             return {"type": "approve"}
         if choice == "r":
             reason = input("  reason (optional): ").strip()
             return {"type": "reject", "message": reason} if reason else {"type": "reject"}
         if choice == "e":
-            args = dict(request["args"])
-            if request["name"] == "add_labels":
-                current = ", ".join(map(str, args.get("labels") or []))
-                raw = input(f"  labels, comma-separated [{visible(current)}]: ").strip()
-                if raw:
-                    args["labels"] = [x.strip() for x in raw.split(",") if x.strip()]
-            else:
-                body = input("  new comment text (Enter keeps it): ").strip()
-                if body:
-                    args["body"] = body
+            args = _edit_batch(request["args"])
             return {"type": "edit", "edited_action": {"name": request["name"], "args": args}}
 
 
@@ -132,7 +160,7 @@ def main() -> None:
 
     for request, decision in log:
         colour = {"approve": GREEN, "reject": RED}.get(decision["type"], YELLOW)
-        print(f"{colour}{decision['type']:<8}{RESET} {request['name']} #{visible(request['args'].get('number'))}")
+        print(f"{colour}{decision['type']:<8}{RESET} {request['name']}")
     path = save_report(result.value.get("files", {}))
     print(f"\n{result.value['messages'][-1].text}\n")
     print(f"{BOLD}Report:{RESET} {path if path else 'the agent did not write ' + REPORT_PATH}")

@@ -2,13 +2,16 @@
 
 An AI assistant for GitHub maintainers that reviews unlabelled issues, suggests labels,
 finds duplicates and prepares replies. It saves a triage report, then asks a human to
-approve, edit or reject every proposed label and comment before changing GitHub.
+review all proposed labels and comments together, once, before changing GitHub.
+The reviewer can apply the whole batch, edit individual items or remove them, or reject
+the batch without changing the repository.
 
-![Terminal demo: the agent reviews new issues, requests approval for labels and a duplicate comment, then finds nothing left to triage on the next run](docs/demo.gif)
+![Real-model terminal demo: one review screen for the whole batch, editing labels and dropping items before applying the reviewed batch](docs/demo.gif)
 
 See the resulting labels and comments in the public
 [issue-triage sandbox](https://github.com/brkakyldz/issue-triage-sandbox), a fictional
-habit-tracker project used for the demo.
+habit-tracker project. The new batched-review recording uses the private playground;
+its run and verification results are included below.
 
 ## What it does
 
@@ -23,8 +26,8 @@ habit-tracker project used for the demo.
   stay in the report for the maintainer to use.
 
 For example, a report about a streak resetting after a second check-in can be labelled
-`bug, duplicate` and linked to the earlier report. The maintainer reviews both the
-labels and the comment; rejecting either leaves that action unapplied.
+`bug, duplicate` and linked to the earlier report. Both actions appear on the same review screen. The maintainer can keep the label
+change and remove the comment, or reject the entire batch.
 
 ## How a triage pass works
 
@@ -33,7 +36,7 @@ flowchart TD
     A["Read unlabelled issues and older open issues"] --> B["Suggest labels and check duplicates"]
     B --> C["Write the triage report"]
     C --> D["Propose labels and duplicate comments"]
-    D --> E{"Maintainer review"}
+    D --> E{"One review of the whole batch"}
     E -->|Approve or edit| F["Apply the reviewed action to GitHub"]
     E -->|Reject| G["Leave that action unapplied"]
 ```
@@ -45,7 +48,8 @@ The tools restrict writes to the repository configured in `GITHUB_REPO` and acce
 only labels that already exist there. By default, they refuse to label an issue that
 has gained labels since it was read. Posted comments carry a hidden marker, preventing
 the agent from commenting twice on the same issue. Issue text is treated as untrusted
-input, and every proposed write still goes through review.
+input, and every proposed write is included in the batch review. A failed item returns its own
+error; it does not roll back successful items or prevent the remaining items from running.
 
 ## Run locally
 
@@ -66,9 +70,14 @@ The repository should have the labels listed above. The default model is
 
 ```bash
 uv run triage --reject-all   # generate a report; reject every GitHub write
-uv run triage                # review and apply individual actions
+uv run triage                # review all actions once, then apply the batch
 uv run triage --all           # include already labelled open issues
 ```
+
+The review screen numbers each label change and comment. Choose `a` to apply all,
+`r` to reject all, or `e` to edit: select an item number, enter new labels or comment
+text, or enter `-` to drop it. An empty Enter finishes editing and submits the edited
+batch; it does not ask for another approval.
 
 The report is saved to `output/triage.md`. Its *Applied* column is the model's summary
 and can be inaccurate; check GitHub for the actual result.
@@ -95,7 +104,13 @@ The 20 fictional issues and their expected results are in
 Run `uv run langgraph dev`, open
 [Studio](https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024),
 select `triage` and send: *"Triage the open issues that have no labels yet."*
-Review the interrupted calls and resume with one decision per action, in order.
+The graph pauses on one `apply_triage(labels, comments)` call. Resume with one
+decision for the batch, for example:
+
+```json
+{"decisions": [{"type": "approve"}]}
+```
+
 The report is available as `/triage.md` in the thread state's `files`.
 
 ## Verification
@@ -109,9 +124,12 @@ Offline tests cover the tools, repeated runs, approval flow and file permissions
 The acceptance script uses the real model and writes to the configured GitHub
 repository; run it against a seeded sandbox with LangSmith configured.
 
-The recorded acceptance run on **2026-10-01** passed **5/5 checks**, including duplicate
-detection, approved/edited/rejected actions and a second pass over the remaining
-unlabelled issue. [Full results](docs/acceptance-2026-10-01.txt).
+The batched-review acceptance run on **2026-10-02** passed **5/5 checks** against
+the real model, private playground and LangSmith: report coverage, duplicate detection,
+one review per pass, a rejected batch leaving GitHub unchanged, an edited batch
+matching the kept actions, and the nested subagent trace. Offline tests passed **23/23**.
+[Current results](docs/acceptance-2026-10-02.txt). The earlier per-action run is retained
+as [historical evidence](docs/acceptance-2026-10-01.txt).
 
 <details>
 <summary>LangSmith trace</summary>

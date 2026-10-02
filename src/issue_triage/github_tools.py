@@ -1,4 +1,4 @@
-"""The four GitHub tools, written with PyGithub.
+"""GitHub tools: two reads and one batched write, backed by guarded PyGithub helpers.
 
 Safety lives here rather than in the prompt:
 - the repository comes only from GITHUB_REPO; no tool takes a repo argument;
@@ -23,6 +23,7 @@ import os
 import threading
 from functools import lru_cache
 from itertools import islice
+from typing import TypedDict
 
 from github import Auth, Github, GithubException, UnknownObjectException
 from github.GithubRetry import GithubRetry
@@ -175,5 +176,27 @@ def post_comment(number: int, body: str) -> str:
     return f"Commented on #{number}: {comment.html_url}"
 
 
+class LabelChange(TypedDict):
+    number: int
+    labels: list[str]
+
+
+class CommentChange(TypedDict):
+    number: int
+    body: str
+
+
+@tool
+def apply_triage(labels: list[LabelChange], comments: list[CommentChange], config: RunnableConfig) -> str:
+    """Apply the whole triage to GitHub in one call: `labels` adds labels to issues
+    (existing labels are kept; only labels the repository already has), `comments` posts
+    public comments (short, factual, friendly). A human reviews the whole batch once and
+    may approve it, edit it (change or drop items) or reject it.
+    Returns one result line per item that was applied or failed."""
+    lines = [add_labels.invoke({"number": c["number"], "labels": c["labels"]}, config=config) for c in labels or []]
+    lines += [post_comment.invoke({"number": c["number"], "body": c["body"]}, config=config) for c in comments or []]
+    return "\n".join(lines) or "Nothing to apply."
+
+
 READ_TOOLS = [list_open_issues, get_issue]
-WRITE_TOOLS = [add_labels, post_comment]
+WRITE_TOOLS = [apply_triage]

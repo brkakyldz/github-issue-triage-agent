@@ -12,9 +12,14 @@ def test_review_prompt_shows_characters_that_could_redraw_the_terminal():
     assert run.visible("line one\nline two\ttab") == "line one\nline two\ttab"
 
 
-def test_editing_labels_survives_a_call_without_labels(monkeypatch):
-    answers = iter(["e", "bug, documentation"])
+def test_edit_changes_and_drops_items_of_the_batch(monkeypatch):
+    # item 1: new labels; item 2: dropped; item 3 (the comment): new text
+    answers = iter(["e", "1", "bug, documentation", "2", "-", "3", "Tracking this in #1.", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    decision = run.ask_reviewer({"name": "add_labels", "args": {"number": 3}, "description": "Add labels"})
-    assert decision == {"type": "edit", "edited_action": {
-        "name": "add_labels", "args": {"number": 3, "labels": ["bug", "documentation"]}}}
+    args = {"labels": [{"number": 3}, {"number": 5, "labels": ["bug"]}],  # a change without labels still edits
+            "comments": [{"number": 5, "body": "Duplicate of #1."}]}
+    decision = run.ask_reviewer({"name": "apply_triage", "args": args, "description": "batch"})
+    assert decision == {"type": "edit", "edited_action": {"name": "apply_triage", "args": {
+        "labels": [{"number": 3, "labels": ["bug", "documentation"]}],
+        "comments": [{"number": 5, "body": "Tracking this in #1."}]}}}
+    assert args["labels"][0] == {"number": 3}  # the request itself is not mutated

@@ -1,0 +1,22 @@
+Repository brkakyldz/issue-triage-playground: 14 open issues; labels cleared.
+
+Reject pass finished in 69s with 1 review(s)
+
+Run finished in 118s with 1 review(s); todos: ['completed', 'completed', 'completed', 'completed']
+
+[PASS] 1. triage.md lists every open issue with a label and a one-line reason
+       C:\github-issue-triage-agent\output\triage.md: 14 rows for 14 open issues; missing []; rows without a main label or reason []; main label agrees with the seed's answer key on 14/14
+
+[PASS] 2. at least one seeded duplicate pair is found
+       seeded [[1, 11], [4, 12]]; found in report [[1, 11], [4, 12]]; 2/2 correct
+
+[PASS] 3a. every write waits for ONE review of the whole batch; reject changes nothing
+       reviews per run: reject pass ['apply_triage'], edit pass ['apply_triage']; GitHub unchanged after the rejected batch: True
+
+[PASS] 3b. the edited batch: exactly what the reviewer kept shows on GitHub
+       one batch with 14 label changes and 2 comments; every open issue's labels equal the kept changes: True ; edited #13 -> ['documentation', 'good first issue']; dropped #10 -> labels none; comment counts equal the kept comments ([11] kept, [12] dropped): True ; kept text posted: True; comments proposed on non-duplicates: none
+
+[PASS] 4. subagent runs nested in the main agent's trace
+       project github-issue-triage-agent, root run 'issue-triage' (115 runs): issue-triage > tools > FilesystemMiddleware.wrap_tool_call > HumanInTheLoopMiddleware.wrap_tool_call > task > duplicate-finder; <LangSmith run link>
+
+5/5 checks passed

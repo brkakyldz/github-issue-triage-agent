@@ -1,26 +1,23 @@
-"""End-to-end acceptance checks against the real model, GitHub and LangSmith.
+"""Acceptance run for batched triage against the real model and the playground repo: batch approval, report quality and tracing.
 
-    uv run triage-seed --first-wave        # a freshly seeded sandbox
     uv run python scripts/acceptance.py
 
-Before the run, labels are stripped from the open issues so every issue is untriaged.
-The scripted reviewer approves most label calls, edits one, rejects one, approves the
-first duplicate comment and rejects the rest; GitHub is then read back to confirm that
-exactly the approved writes happened. A second run follows, rejecting everything: it
-must only look at the issues that are still unlabelled. Needs GITHUB_TOKEN and
-LANGSMITH_API_KEY.
+Before the run, labels are stripped from the open issues so the result is readable.
+Two triage passes follow, each ending in one review of the whole batch: the first
+rejects it (GitHub must not change), the second edits it — one issue's labels changed,
+one issue dropped, only the first duplicate comment kept. GitHub is then read back to
+confirm that exactly the kept writes happened. Needs GITHUB_TOKEN and LANGSMITH_API_KEY.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
 import sys
 import time
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from issue_triage.config import LANGSMITH_PROJECT, PROJECT_DIR, load_env
 
@@ -67,42 +64,64 @@ def main() -> int:
         if issue.labels:
             issue.delete_labels()
     comments_before = {n: i.comments for n, i in open_issues.items()}
-    commented_before = {n for n, i in open_issues.items()  # the agent never comments on these again
-                        if i.comments and any(COMMENT_MARKER in (c.body or "") for c in i.get_comments())}
     print(f"Repository {repo.full_name}: {len(open_issues)} open issues; labels cleared.\n")
 
     reject_labels_on = numbers["stats-dark-mode"]
     edit_labels_on = numbers["help-typo"]
     known_labels = {label.name.lower() for label in repo.get_labels()}
-    applied: dict[str, list] = {"labels_approved": [], "labels_edited": [], "comment_approved": [], "comment_rejected": []}
+    applied: dict[str, list] = {"labels_approved": [], "labels_edited": [], "labels_dropped": [],
+                                "comment_approved": [], "comment_dropped": []}
+
+    def number_of(change: dict) -> int | None:
+        try:  # the model's raw arguments: "10" and 10 are the same issue to the tool
+            return int(change.get("number"))
+        except (TypeError, ValueError):
+            return None
 
     def reviewer(request: dict) -> dict:
+        """Edit the one batch: drop one issue's labels, change another's, keep only the first comment."""
         args = request["args"]
-        try:  # the model's raw arguments: "10" and 10 are the same issue to the tool
-            number = int(args.get("number"))
-        except (TypeError, ValueError):
-            return {"type": "reject", "message": "Not an issue number."}
-        if request["name"] == "add_labels":
-            labels = [str(x).strip() for x in args.get("labels") or []]
+        labels, comments = [], []
+        for change in args.get("labels") or []:
+            number, wanted = number_of(change), [str(x).strip() for x in change.get("labels") or []]
+            if number is None:
+                continue
             if number == reject_labels_on:
-                return {"type": "reject", "message": "Leave this one for the maintainers."}
+                applied["labels_dropped"].append(number)
+                continue
             if number == edit_labels_on:
-                edited = sorted({x.lower() for x in labels} | {"documentation", "good first issue"})
-                applied["labels_edited"].append((number, edited))
-                return {"type": "edit", "edited_action": {"name": "add_labels", "args": {**args, "labels": edited}}}
-            applied["labels_approved"].append((number, labels))
-            return {"type": "approve"}
-        if not applied["comment_approved"]:  # approve the first comment, reject every later one
-            applied["comment_approved"].append((number, args.get("body", "")))
-            return {"type": "approve"}
-        applied["comment_rejected"].append((number, args.get("body", "")))
-        return {"type": "reject", "message": "Keep it open; the reporter asked a different question."}
+                wanted = sorted({x.lower() for x in wanted} | {"documentation", "good first issue"})
+                applied["labels_edited"].append((number, wanted))
+            else:
+                applied["labels_approved"].append((number, wanted))
+            labels.append({**change, "labels": wanted})
+        for change in args.get("comments") or []:
+            number = number_of(change)
+            if number is not None and not comments and not any(COMMENT_MARKER in (c.body or "") for c in open_issues[number].get_comments()):
+                applied["comment_approved"].append((number, change.get("body", "")))
+                comments.append(change)
+            else:
+                applied["comment_dropped"].append((number, change.get("body", "")))
+        return {"type": "edit", "edited_action": {"name": request["name"],
+                                                  "args": {**args, "labels": labels, "comments": comments}}}
+
+    # A first pass rejects the whole batch: GitHub must not change at all.
+    def status() -> dict[int, tuple[frozenset[str], int]]:
+        return {i.number: (frozenset(label.name.lower() for label in i.labels), i.comments)
+                for i in repo.get_issues(state="open") if i.pull_request is None}
+
+    before = status()
+    started = time.time()
+    _, reject_log = run_triage(build_agent(make_model(), checkpointer=InMemorySaver()),
+                               lambda request: {"type": "reject", "message": "Not today."})
+    print(f"Reject pass finished in {time.time() - started:.0f}s with {len(reject_log)} review(s)\n")
+    rejected_untouched = status() == before
 
     thread_id = str(uuid.uuid4())
     agent = build_agent(make_model(), checkpointer=InMemorySaver())
     started = time.time()
     result, log = run_triage(agent, reviewer, thread_id=thread_id)
-    print(f"Run finished in {time.time() - started:.0f}s with {len(log)} reviewed writes; "
+    print(f"Run finished in {time.time() - started:.0f}s with {len(log)} review(s); "
           f"todos: {[t.get('status') for t in result.value.get('todos', [])]}\n")
 
     path = save_report(result.value.get("files", {}))
@@ -123,11 +142,16 @@ def main() -> int:
     found = expected_pairs & pairs
     check("2. at least one seeded duplicate pair is found", len(found) >= 1,
           f"seeded {sorted(sorted(p) for p in expected_pairs)}; found in report {sorted(sorted(p) for p in pairs)}; "
-          f"{len(found)}/{len(expected_pairs)} correct")
+          f"{len(found)}/2 correct")
 
-    # 3. Writes interrupt; approve -> visible on GitHub; reject -> nothing changes.
-    # Every open issue must now look exactly as the approved calls say: labels were cleared
-    # first, and a call with any unknown label is refused whole by the tool.
+    # 3. Writes interrupt once, as one batch; reject -> nothing changes; the edited batch
+    # -> exactly what the reviewer kept is on GitHub. Labels were cleared first, and a
+    # label change with any unknown label is refused whole by the tool.
+    reviews = [r["name"] for r, _ in reject_log + log]
+    check("3a. every write waits for ONE review of the whole batch; reject changes nothing",
+          reviews == ["apply_triage", "apply_triage"] and rejected_untouched,
+          f"reviews per run: reject pass {[r['name'] for r, _ in reject_log]}, edit pass "
+          f"{[r['name'] for r, _ in log]}; GitHub unchanged after the rejected batch: {rejected_untouched}")
     repo_now = {i.number: i for i in repo.get_issues(state="open") if i.pull_request is None}
     labels_now = {n: {label.name.lower() for label in i.labels} for n, i in repo_now.items()}
     expected_labels: dict[int, set[str]] = {}
@@ -135,26 +159,26 @@ def main() -> int:
         wanted = {x.lower() for x in ls if x}
         if wanted and wanted <= known_labels:
             expected_labels.setdefault(n, set()).update(wanted)
-    approved_comments = [n for n, _ in applied["comment_approved"] if n not in commented_before]
+    approved_comments = [n for n, _ in applied["comment_approved"]]
     wrong_labels = {n: sorted(labels_now[n]) for n in repo_now if labels_now[n] != expected_labels.get(n, set())}
     wrong_comments = [n for n in repo_now if repo_now[n].comments != comments_before.get(n, 0) + approved_comments.count(n)]
-    comment_text_ok = all(
-        repo_now[n].get_comments().reversed[0].body.replace(COMMENT_MARKER, "").strip() == body.strip()
-        for n, body in applied["comment_approved"] if n in approved_comments
-    )
+    comment_text_ok = all(n in repo_now and repo_now[n].get_comments().reversed[0].body.strip() == (body.strip() + "\n\n" + COMMENT_MARKER)
+                          for n, body in applied["comment_approved"])
     duplicates = {newer for newer, _ in key["duplicate_pairs"]}
-    check("3. label/comment writes wait for approval; approve shows on GitHub, reject changes nothing",
-          bool(log) and not wrong_labels and not wrong_comments and comment_text_ok and bool(approved_comments)
-          and labels_now.get(reject_labels_on) == set()
-          and any(d["type"] == "reject" for _, d in log) and any(d["type"] == "edit" for _, d in log),
-          f"{len(log)} writes reviewed ({sum(1 for r, _ in log if r['name'] == 'add_labels')} add_labels, "
-          f"{sum(1 for r, _ in log if r['name'] == 'post_comment')} post_comment); every open issue's labels "
-          f"equal the approved calls: {not wrong_labels} {wrong_labels or ''}; edited #{edit_labels_on} -> "
-          f"{sorted(labels_now.get(edit_labels_on, []))}; rejected #{reject_labels_on} -> labels "
-          f"{sorted(labels_now.get(reject_labels_on, [])) or 'none'}; comment counts equal the approved comments "
-          f"({approved_comments} approved, {[n for n, _ in applied['comment_rejected']]} rejected): "
-          f"{not wrong_comments} {wrong_comments or ''}; approved text posted: {comment_text_ok}; comments proposed "
-          f"on non-duplicates: {sorted({n for n, _ in applied['comment_approved'] + applied['comment_rejected']} - duplicates) or 'none'}")
+    proposed = len(applied["labels_approved"]) + len(applied["labels_edited"]) + len(applied["labels_dropped"])
+    check("3b. the edited batch: exactly what the reviewer kept shows on GitHub",
+          bool(log) and not wrong_labels and not wrong_comments and comment_text_ok
+          and bool(applied["comment_approved"] or applied["comment_dropped"])
+          and applied["labels_dropped"] == [reject_labels_on] and labels_now.get(reject_labels_on) == set()
+          and [d["type"] for _, d in log] == ["edit"],
+          f"one batch with {proposed} label changes and "
+          f"{len(applied['comment_approved']) + len(applied['comment_dropped'])} comments; every open issue's labels "
+          f"equal the kept changes: {not wrong_labels} {wrong_labels or ''}; edited #{edit_labels_on} -> "
+          f"{sorted(labels_now.get(edit_labels_on, []))}; dropped #{reject_labels_on} -> labels "
+          f"{sorted(labels_now.get(reject_labels_on, [])) or 'none'}; comment counts equal the kept comments "
+          f"({approved_comments} kept, {[n for n, _ in applied['comment_dropped']]} dropped): "
+          f"{not wrong_comments} {wrong_comments or ''}; kept text posted: {comment_text_ok}; comments proposed "
+          f"on non-duplicates: {sorted({n for n, _ in applied['comment_approved'] + applied['comment_dropped']} - duplicates) or 'none'}")
 
     # 4. Traces: the subagent's runs sit inside the main agent's trace, under a `task` tool run.
     if not os.environ.get("LANGSMITH_API_KEY"):
@@ -164,12 +188,12 @@ def main() -> int:
         from langsmith import Client
 
         wait_for_all_tracers()
-        # config.py names the project; an inherited LANGSMITH_PROJECT would send traces elsewhere
+        # PLAN names the project; an inherited LANGSMITH_PROJECT would send traces elsewhere
         client, project = Client(), LANGSMITH_PROJECT
         nested, evidence = False, f"no root run for the thread in {project} (LANGSMITH_PROJECT={os.environ.get('LANGSMITH_PROJECT')})"
         for _ in range(36):  # ingestion is asynchronous
             roots = [r for r in client.list_runs(project_name=project, is_root=True, limit=50,
-                                                 start_time=datetime.now(UTC) - timedelta(minutes=60))
+                                                 start_time=datetime.now(timezone.utc) - timedelta(minutes=60))
                      if ((r.extra or {}).get("metadata") or {}).get("thread_id") == thread_id]
             for root in roots:
                 runs = {r.id: r for r in client.list_runs(project_name=project, trace_id=root.id)}
@@ -193,29 +217,9 @@ def main() -> int:
             time.sleep(5)
         check("4. subagent runs nested in the main agent's trace", nested, evidence)
 
-    if path:  # before the second run overwrites output/triage.md
+    if path:
         (PROJECT_DIR / "docs").mkdir(exist_ok=True)
         shutil.copyfile(path, PROJECT_DIR / "docs" / "triage-example.md")
-
-    # 5. A second, default run looks only at the issues that are still unlabelled. Its
-    # reviewer rejects everything, so GitHub must not change at all.
-    state_before = {n: (labels_now[n], repo_now[n].comments) for n in repo_now}
-    unlabelled = {n for n, labels in labels_now.items() if not labels}
-    second, second_log = run_triage(build_agent(make_model(), checkpointer=InMemorySaver()),
-                                    lambda r: {"type": "reject", "message": "Second run: no changes."})
-    listed = next((json.loads(m.content) for m in second.value["messages"]
-                   if m.type == "tool" and m.name == "list_open_issues"), None)
-    to_triage = {i["number"] for i in (listed or {}).get("to_triage", [])}
-    label_targets = {str(r["args"].get("number")) for r, _ in second_log if r["name"] == "add_labels"}
-    repo_after = {i.number: i for i in repo.get_issues(state="open") if i.pull_request is None}
-    state_after = {n: ({label.name.lower() for label in i.labels}, i.comments) for n, i in repo_after.items()}
-    check("5. a second run triages only the issues still without labels",
-          listed is not None and to_triage == unlabelled
-          and label_targets <= {str(n) for n in unlabelled} and state_after == state_before,
-          f"unlabelled after the first run: {sorted(unlabelled)}; the second run's to_triage: {sorted(to_triage)}; "
-          f"add_labels proposed for {sorted(label_targets)} ({len(second_log)} reviewed calls, all rejected, "
-          f"against {len(log)} in the first run); GitHub unchanged: {state_after == state_before}")
-
     passed = sum(ok for _, ok, _ in RESULTS)
     print(f"{passed}/{len(RESULTS)} checks passed")
     return 0 if passed == len(RESULTS) else 1

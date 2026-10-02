@@ -109,7 +109,7 @@ def test_parallel_writes_reach_github_one_at_a_time(repo, monkeypatch):
 
 def test_there_is_no_tool_that_closes_or_deletes():
     names = {t.name for t in gt.READ_TOOLS + gt.WRITE_TOOLS}
-    assert names == {"list_open_issues", "get_issue", "add_labels", "post_comment"}
+    assert names == {"list_open_issues", "get_issue", "apply_triage"}
     assert all("repo" not in t.args for t in gt.READ_TOOLS + gt.WRITE_TOOLS)  # no way to target another repo
 
 
@@ -136,3 +136,19 @@ def test_repo_resolution_refuses_a_redirect(monkeypatch):
         raise AssertionError("expected a refusal")
     finally:
         gt._repo.cache_clear()
+
+
+def test_batch_keeps_guards_and_continues_after_a_failed_item(repo):
+    result = gt.apply_triage.invoke({"labels": [
+        {"number": 1, "labels": ["unknown"]},
+        {"number": 2, "labels": ["bug"]}], "comments": []})
+    assert "Error: unknown" in result and "Labelled #2: bug" in result
+    assert repo.issues[1].labels == []
+    assert [label.name for label in repo.issues[2].labels] == ["bug"]
+
+
+def test_batch_forwards_retriage_configuration(repo):
+    repo.issues[1].add_to_labels("question")
+    batch = {"labels": [{"number": 1, "labels": ["bug"]}], "comments": []}
+    assert "was triaged before" in gt.apply_triage.invoke(batch)
+    assert gt.apply_triage.invoke(batch, config=RETRIAGE) == "Labelled #1: bug"

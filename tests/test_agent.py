@@ -14,43 +14,50 @@ from .conftest import ScriptedModel, calls
 REPORT = "# Issue triage\n\n| # | Title | Suggested labels | Reason | Duplicate of | Applied |\n"
 
 
+BATCH = {
+    "labels": [{"number": 1, "labels": ["bug"]}, {"number": 2, "labels": ["bug", "duplicate"]}],
+    "comments": [{"number": 2, "body": "Looks like a duplicate of #1."}],
+}
+
+
 def scripted_run(repo, decide):
     model = ScriptedModel(replies=[
         calls(("write_file", {"file_path": REPORT_PATH, "content": REPORT})),
-        calls(
-            ("add_labels", {"number": 1, "labels": ["bug"]}),
-            ("add_labels", {"number": 2, "labels": ["bug", "duplicate"]}),
-            ("post_comment", {"number": 2, "body": "Looks like a duplicate of #1."}),
-        ),
-        AIMessage("Done: 1 labelled, 1 rejected, 1 comment edited."),
+        calls(("apply_triage", BATCH)),
+        AIMessage("Done."),
     ])
     agent = build_agent(model, checkpointer=InMemorySaver())
     return run_triage(agent, decide), model
 
 
-def test_every_write_waits_for_the_reviewer_and_follows_the_decision(repo, tmp_path):
-    decisions = iter([
-        {"type": "approve"},
-        {"type": "reject", "message": "Not sure it is the same bug."},
-        {"type": "edit", "edited_action": {"name": "post_comment",
-                                           "args": {"number": 2, "body": "Thanks! Tracking this in #1."}}},
-    ])
-    (result, log), _ = scripted_run(repo, lambda request: next(decisions))
+def test_the_whole_batch_waits_for_one_review_and_approve_applies_it(repo, tmp_path):
+    (result, log), _ = scripted_run(repo, lambda request: {"type": "approve"})
 
-    # one batched interrupt with the three writes, each described for the reviewer
-    assert [r["name"] for r, _ in log] == ["add_labels", "add_labels", "post_comment"]
-    assert log[0][0]["description"] == "Add labels ['bug'] to issue #1"
-    # approve -> applied; reject -> nothing changed; edit -> the reviewer's text was posted
+    # one approval request for every write, described as one numbered list
+    assert [r["name"] for r, _ in log] == ["apply_triage"]
+    description = log[0][0]["description"]
+    assert "Apply 2 label change(s) and 1 comment(s)" in description
+    assert "  1. #1  labels: bug" in description and "  3. #2  comment:" in description
     assert [label.name for label in repo.issues[1].labels] == ["bug"]
-    assert repo.issues[2].labels == []
-    assert [c.body for c in repo.issues[2].comment_list] == ["Thanks! Tracking this in #1.\n\n" + COMMENT_MARKER]
+    assert [label.name for label in repo.issues[2].labels] == ["bug", "duplicate"]
+    assert [c.body for c in repo.issues[2].comment_list] == ["Looks like a duplicate of #1.\n\n" + COMMENT_MARKER]
 
     # the report lives in the virtual filesystem and is saved by host code
     path = save_report(result.value["files"], tmp_path)
     assert path.read_text(encoding="utf-8") == REPORT
 
 
-def test_reject_all_leaves_github_untouched(repo):
+def test_an_edited_batch_applies_only_what_the_reviewer_kept(repo):
+    edited = {"labels": [{"number": 1, "labels": ["bug", "good first issue"]}],
+              "comments": [{"number": 2, "body": "Thanks! Tracking this in #1."}]}
+    scripted_run(repo, lambda request: {"type": "edit",
+                                        "edited_action": {"name": "apply_triage", "args": edited}})
+    assert [label.name for label in repo.issues[1].labels] == ["bug", "good first issue"]
+    assert repo.issues[2].labels == []  # dropped by the reviewer
+    assert [c.body for c in repo.issues[2].comment_list] == ["Thanks! Tracking this in #1.\n\n" + COMMENT_MARKER]
+
+
+def test_reject_leaves_github_untouched(repo):
     scripted_run(repo, lambda request: {"type": "reject", "message": "dry run"})
     assert all(issue.labels == [] and issue.comments == 0 for issue in repo.issues.values())
 
@@ -80,6 +87,20 @@ def test_the_subagent_cannot_write_the_report(repo):
     assert any("permission denied" in c for c in subagent_saw)
 
 
+def test_served_agent_has_no_checkpointer_and_no_general_purpose_subagent(repo, monkeypatch):
+    # The general-purpose subagent is switched off by a harness profile registered for the
+    # "openai" provider, so this check uses the real model class (building it makes no call).
+    from issue_triage.config import make_model
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-used")
+    agent = build_agent(make_model())
+    assert agent.checkpointer is None  # `langgraph dev` refuses graphs that bring one
+    tools = agent.nodes["tools"].bound.tools_by_name
+    assert "- duplicate-finder:" in tools["task"].description
+    assert "- general-purpose:" not in tools["task"].description  # not among the listed subagents
+    assert "write_todos" in tools
+
+
 def triage_labelled_issue(repo, retriage: bool):
     """#1 already has a label; the model lists issues, asks the subagent (which lists them
     too) and tries to relabel #1. Returns what the main agent and the subagent were told."""
@@ -89,7 +110,7 @@ def triage_labelled_issue(repo, retriage: bool):
         calls(("task", {"description": "Find duplicates.", "subagent_type": "duplicate-finder"})),
         calls(("list_open_issues", {})),  # the subagent
         AIMessage("none"),
-        calls(("add_labels", {"number": 1, "labels": ["bug"]})),
+        calls(("apply_triage", {"labels": [{"number": 1, "labels": ["bug"]}], "comments": []})),
         AIMessage("done"),
     ])
     result, _ = run_triage(build_agent(model, checkpointer=InMemorySaver()), lambda r: {"type": "approve"},
@@ -112,17 +133,3 @@ def test_a_retriage_run_reaches_the_tools_and_the_subagent(repo):
     assert '"already_triaged": []' in tool_results[0]
     assert '"already_triaged": []' in subagent_saw[-1]
     assert tool_results[-1] == "Labelled #1: bug"
-
-
-def test_served_agent_has_no_checkpointer_and_no_general_purpose_subagent(repo, monkeypatch):
-    # The general-purpose subagent is switched off by a harness profile registered for the
-    # "openai" provider, so this check uses the real model class (building it makes no call).
-    from issue_triage.config import make_model
-
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-used")
-    agent = build_agent(make_model())
-    assert agent.checkpointer is None  # `langgraph dev` refuses graphs that bring one
-    tools = agent.nodes["tools"].bound.tools_by_name
-    assert "- duplicate-finder:" in tools["task"].description
-    assert "- general-purpose:" not in tools["task"].description  # not among the listed subagents
-    assert "write_todos" in tools
