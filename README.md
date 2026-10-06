@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/brkakyldz/github-issue-triage-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/brkakyldz/github-issue-triage-agent/actions/workflows/ci.yml)
 
-*Hands-on project for LangChain Academy's [Foundation: Introduction to Deep Agents](https://academy.langchain.com/courses/foundation-introduction-to-deepagents). Built with Deep Agents (`create_deep_agent`) with planning, a read-only subagent, a virtual filesystem, one human-reviewed batch of GitHub writes and LangSmith tracing.*
+*Built with Deep Agents (`create_deep_agent`) with planning, a read-only subagent, a virtual filesystem, one human-reviewed batch of GitHub writes and LangSmith tracing.*
 
 An AI assistant for GitHub maintainers that reviews unlabelled issues, suggests labels,
 finds duplicates and prepares replies. It saves a triage report, then asks a human to
