@@ -1,5 +1,9 @@
 # GitHub Issue Triage Agent
 
+[![CI](https://github.com/brkakyldz/github-issue-triage-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/brkakyldz/github-issue-triage-agent/actions/workflows/ci.yml)
+
+*Hands-on project for LangChain Academy's [Foundation: Introduction to Deep Agents](https://academy.langchain.com/courses/foundation-introduction-to-deepagents). Built with Deep Agents (`create_deep_agent`) with planning, a read-only subagent, a virtual filesystem, one human-reviewed batch of GitHub writes and LangSmith tracing.*
+
 An AI assistant for GitHub maintainers that reviews unlabelled issues, suggests labels,
 finds duplicates and prepares replies. It saves a triage report, then asks a human to
 review all proposed labels and comments together, once, before changing GitHub.
@@ -8,10 +12,11 @@ the batch without changing the repository.
 
 ![Real-model terminal demo: one review screen for the whole batch, editing labels and dropping items before applying the reviewed batch](docs/demo.gif)
 
-See the resulting labels and comments in the public
+See the agent's labels and comments in the public
 [issue-triage sandbox](https://github.com/brkakyldz/issue-triage-sandbox), a fictional
-habit-tracker project. The new batched-review recording uses the private playground;
-its run and verification results are included below.
+habit-tracker project. The recording above, and the acceptance run below, use a second
+copy of that inbox (14 seeded issues) that the test script is free to reset, so the
+public sandbox keeps a readable history.
 
 ## What it does
 
@@ -37,8 +42,8 @@ flowchart TD
     B --> C["Write the triage report"]
     C --> D["Propose labels and duplicate comments"]
     D --> E{"One review of the whole batch"}
-    E -->|Approve or edit| F["Apply the reviewed action to GitHub"]
-    E -->|Reject| G["Leave that action unapplied"]
+    E -->|Approve or edit| F["Apply the reviewed batch to GitHub"]
+    E -->|Reject| G["GitHub stays unchanged"]
 ```
 
 Built with **Deep Agents**, a read-only duplicate-finder subagent and **PyGithub**.
@@ -122,14 +127,17 @@ uv run python scripts/acceptance.py
 
 Offline tests cover the tools, repeated runs, approval flow and file permissions.
 The acceptance script uses the real model and writes to the configured GitHub
-repository; run it against a seeded sandbox with LangSmith configured.
+repository. It first **removes the labels from every open issue**, so run it only
+against a seeded sandbox, with LangSmith configured.
 
 The batched-review acceptance run on **2026-10-02** passed **5/5 checks** against
-the real model, private playground and LangSmith: report coverage, duplicate detection,
+the real model, the seeded sandbox copy and LangSmith: report coverage, duplicate detection,
 one review per pass, a rejected batch leaving GitHub unchanged, an edited batch
 matching the kept actions, and the nested subagent trace. Offline tests passed **23/23**.
-[Current results](docs/acceptance-2026-10-02.txt). The earlier per-action run is retained
-as [historical evidence](docs/acceptance-2026-10-01.txt).
+[Current results](docs/acceptance-2026-10-02.txt). The first batched attempt that day
+[passed 3/5](docs/acceptance-2026-10-02-initial.txt): the duplicate-finder missed both
+pairs until its prompt said to compare only the issues being triaged. The earlier
+per-action run is retained as [historical evidence](docs/acceptance-2026-10-01.txt).
 
 <details>
 <summary>LangSmith trace</summary>

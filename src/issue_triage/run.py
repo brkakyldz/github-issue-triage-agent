@@ -1,6 +1,6 @@
-"""Run a triage pass from the terminal; you review every GitHub write.
+"""Run a triage pass from the terminal; you review the GitHub writes once, as one batch.
 
-    uv run triage                  # triage the issues without labels; you review each write
+    uv run triage                  # triage the issues without labels; you review the batch
     uv run triage --all            # re-triage every open issue, labelled or not
     uv run triage --reject-all     # dry run: the report is written, GitHub is untouched
 

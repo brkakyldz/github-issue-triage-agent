@@ -1,4 +1,4 @@
-"""Acceptance run for batched triage against the real model and the playground repo: batch approval, report quality and tracing.
+"""Acceptance run for batched triage against the real model and a seeded sandbox repo: batch approval, report quality and tracing.
 
     uv run python scripts/acceptance.py
 
@@ -189,7 +189,7 @@ def main() -> int:
         from langsmith import Client
 
         wait_for_all_tracers()
-        # PLAN names the project; an inherited LANGSMITH_PROJECT would send traces elsewhere
+        # config.py pins the project; an inherited LANGSMITH_PROJECT would send traces elsewhere
         client, project = Client(), LANGSMITH_PROJECT
         nested, evidence = False, f"no root run for the thread in {project} (LANGSMITH_PROJECT={os.environ.get('LANGSMITH_PROJECT')})"
         for _ in range(36):  # ingestion is asynchronous

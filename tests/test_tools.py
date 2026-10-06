@@ -83,7 +83,7 @@ def test_an_issue_moved_to_another_repository_is_refused(repo):
 
 
 def test_parallel_writes_reach_github_one_at_a_time(repo, monkeypatch):
-    # Approved calls run in parallel threads and one PyGithub client is not thread-safe.
+    # Tool calls from one model turn run in parallel threads; one PyGithub client is not thread-safe.
     active, most = [0], [0]
     get_issue = repo.get_issue
 

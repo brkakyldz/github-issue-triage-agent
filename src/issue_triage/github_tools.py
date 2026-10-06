@@ -9,8 +9,9 @@ Safety lives here rather than in the prompt:
 - the agent never comments twice on an issue: its comments carry a hidden marker, and
   `post_comment` refuses an issue that already has one;
 - an issue that GitHub redirects to another repository (it was transferred) is refused;
-- GitHub calls are serialised: approved calls run in parallel threads, and one PyGithub
-  client is not safe to share between them;
+- GitHub calls are serialised: tool calls from one model turn (the agent batches its
+  reads, and the subagent reads too) run in parallel threads, and one PyGithub client is
+  not safe to share between them;
 - every tool returns an error string instead of raising, so a GitHub failure reaches
   the model instead of aborting the run.
 Issue text is written by strangers, so the tools present it as data.
@@ -37,8 +38,8 @@ MAX_COMMENT_CHARS = 1500
 COMMENT_MARKER = "<!-- issue-triage-agent -->"
 
 # PyGithub keeps the request of a persistent connection on the shared client object, so
-# two tool calls running at once (the agent batches its writes, and each approved call
-# runs in its own thread) can send a label or comment to the wrong issue.
+# two tool calls running at once (tool calls from one model turn run in parallel threads)
+# can read or write the wrong issue.
 _GITHUB_LOCK = threading.Lock()
 
 
@@ -47,7 +48,7 @@ def _repo():
     full_name = os.environ.get("GITHUB_REPO")
     token = os.environ.get("GITHUB_TOKEN")
     if not full_name or not token:
-        raise RuntimeError("GITHUB_REPO and GITHUB_TOKEN must be set (see .env.example)")
+        raise RuntimeError("GITHUB_REPO and GITHUB_TOKEN must be set (see env.example)")
     gh = Github(auth=Auth.Token(token), per_page=100, retry=GithubRetry(max_rate_limit_wait=30))
     repo = gh.get_repo(full_name)
     if repo.full_name.lower() != full_name.lower():  # a renamed repo is redirected by GitHub
@@ -139,7 +140,8 @@ def get_issue(number: int) -> str:
 def add_labels(number: int, labels: list[str], config: RunnableConfig) -> str:
     """Add labels to an issue (existing labels are kept). Only labels that already
     exist in the repository are accepted, and only issues without labels are labelled
-    unless this is a re-triage run. A human approves every call."""
+    unless this is a re-triage run. Reached only through `apply_triage`, which a
+    human reviews."""
     try:
         wanted = [name.strip() for name in labels if name and name.strip()]
         with _GITHUB_LOCK:
@@ -161,7 +163,8 @@ def add_labels(number: int, labels: list[str], config: RunnableConfig) -> str:
 @tool
 def post_comment(number: int, body: str) -> str:
     """Post a public comment on an issue. Keep it short, factual and friendly.
-    The agent comments at most once per issue. A human approves every call."""
+    The agent comments at most once per issue. Reached only through `apply_triage`,
+    which a human reviews."""
     body = (body or "").strip()
     if not body or len(body) > MAX_COMMENT_CHARS:
         return f"Error: a comment must be 1-{MAX_COMMENT_CHARS} characters"
