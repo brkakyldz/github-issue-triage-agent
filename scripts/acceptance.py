@@ -17,7 +17,7 @@ import shutil
 import sys
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from issue_triage.config import LANGSMITH_PROJECT, PROJECT_DIR, load_env
 
@@ -97,7 +97,8 @@ def main() -> int:
             labels.append({**change, "labels": wanted})
         for change in args.get("comments") or []:
             number = number_of(change)
-            if number is not None and not comments and not any(COMMENT_MARKER in (c.body or "") for c in open_issues[number].get_comments()):
+            if number is not None and not comments and not any(
+                    COMMENT_MARKER in (c.body or "") for c in open_issues[number].get_comments()):
                 applied["comment_approved"].append((number, change.get("body", "")))
                 comments.append(change)
             else:
@@ -193,7 +194,7 @@ def main() -> int:
         nested, evidence = False, f"no root run for the thread in {project} (LANGSMITH_PROJECT={os.environ.get('LANGSMITH_PROJECT')})"
         for _ in range(36):  # ingestion is asynchronous
             roots = [r for r in client.list_runs(project_name=project, is_root=True, limit=50,
-                                                 start_time=datetime.now(timezone.utc) - timedelta(minutes=60))
+                                                 start_time=datetime.now(UTC) - timedelta(minutes=60))
                      if ((r.extra or {}).get("metadata") or {}).get("thread_id") == thread_id]
             for root in roots:
                 runs = {r.id: r for r in client.list_runs(project_name=project, trace_id=root.id)}
